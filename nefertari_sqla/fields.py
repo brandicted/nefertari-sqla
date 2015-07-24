@@ -23,6 +23,8 @@ from .types import (
     Time,
     Choice,
     ChoiceArray,
+    ACLType,
+    ACLEncoderMixin,
 )
 
 
@@ -302,7 +304,7 @@ class UnicodeTextField(StringField):
     _sqla_type_cls = LimitedUnicodeText
 
 
-class DictField(BaseField):
+class DictField(ProcessableMixin, BaseField):
     _sqla_type_cls = JSONType
     _type_unchanged_kwargs = ()
 
@@ -313,7 +315,19 @@ class DictField(BaseField):
         return type_args, type_kw, cleaned_kw
 
 
-class ListField(BaseField):
+class ACLField(ACLEncoderMixin, ProcessableMixin, BaseField):
+    """ Field used to store Pyramid ACLs. """
+    _sqla_type_cls = ACLType
+    _type_unchanged_kwargs = ()
+
+    def process_type_args(self, kwargs):
+        type_args, type_kw, cleaned_kw = super(
+            ACLField, self).process_type_args(kwargs)
+        cleaned_kw['default'] = cleaned_kw.get('default') or []
+        return type_args, type_kw, cleaned_kw
+
+
+class ListField(ProcessableMixin, BaseField):
     _sqla_type_cls = ChoiceArray
     _type_unchanged_kwargs = (
         'as_tuple', 'dimensions', 'zero_indexes', 'choices')

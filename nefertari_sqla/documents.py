@@ -18,9 +18,13 @@ from nefertari.json_httpexceptions import (
 from nefertari.utils import (
     process_fields, process_limit, _split, dictset,
     drop_reserved_params)
-from .signals import ESMetaclass, on_bulk_delete
-from .fields import ListField, DictField, IntegerField
+from nefertari.engine.common import MultiEngineDocMixin
+
+from .meta import DocMeta
+from .signals import on_bulk_delete, on_bulk_update
+from .fields import ListField, DictField, IntegerField, Relationship
 from . import types
+from .utils import relationship_fields
 
 
 log = logging.getLogger(__name__)
@@ -94,6 +98,8 @@ class BaseMixin(object):
     """ Represents mixin class for models.
 
     Attributes:
+        _sync_events: Boolean indicating whether sync events should be
+            triggered on model instances change.
         _auth_fields: String names of fields meant to be displayed to
             authenticated users.
         _public_fields: String names of fields meant to be displayed to
@@ -108,12 +114,12 @@ class BaseMixin(object):
             Defaults to 1(one) which makes only one level of relationship
             nested.
     """
-    _public_fields = None
+    _sync_events = True
     _auth_fields = None
+    _public_fields = None
     _hidden_fields = None
     _nested_relationships = ()
     _nesting_depth = 1
-
     _type = property(lambda self: self.__class__.__name__)
 
     @classmethod
@@ -173,6 +179,33 @@ class BaseMixin(object):
             cls(**{set_to: target})
 
         event.listen(model, 'after_insert', generate)
+
+    @classmethod
+    def _get_fields_creators(cls):
+        """ Return map of field creator classes/functions.
+
+        Map consists of:
+            field name: String name of a field
+            field creator: Class/func that may be run to create new
+                instance of such field. Note that these are classes that
+                create fields, not classes of created fields. E.g.
+                "Relationship" func instead of "RelationshipProperty".
+
+        Does not return backref relationship fields.
+        """
+        columns = cls._mapped_columns()
+        columns.update(cls._mapped_relationships())
+        backrefs = [
+            key for key, val in columns.items()
+            if (isinstance(val, relationship_fields) and
+                getattr(val, '_is_backref', True))]
+        columns = {key: type(val) for key, val in columns.items()}
+        for key in columns:
+            if columns[key] in relationship_fields:
+                columns[key] = Relationship
+        for name in backrefs:
+            columns.pop(name, None)
+        return columns
 
     @classmethod
     def pk_field(cls):
@@ -552,17 +585,19 @@ class BaseMixin(object):
         return [f for f in native_fields if f.unique or f.primary_key]
 
     @classmethod
-    def get_or_create(cls, **params):
+    def get_or_create(cls, request=None, **params):
         defaults = params.pop('defaults', {})
         _limit = params.pop('_limit', 1)
-        query_set = cls.get_collection(_limit=_limit, **params)
+        query_set = cls.get_collection(
+            _query_secondary=False, _limit=_limit,
+            **params)
         try:
             obj = query_set.one()
             return obj, False
         except NoResultFound:
             defaults.update(params)
             new_obj = cls(**defaults)
-            new_obj.save()
+            new_obj.save(request=request)
             return new_obj, True
         except MultipleResultsFound:
             raise JHTTPBadRequest('Bad or Insufficient Params')
@@ -632,13 +667,14 @@ class BaseMixin(object):
         """
         if isinstance(items, Query):
             upd_queryset = cls._clean_queryset(items)
-            upd_queryset._request = request
+            upd_items = upd_queryset.all()
             upd_count = upd_queryset.update(
                 params, synchronize_session=synchronize_session)
+            on_bulk_update(cls, upd_items, request)
             return upd_count
         items_count = len(items)
         for item in items:
-            item.update(params, request)
+            item.update(params, request=request)
         return items_count
 
     @classmethod
@@ -843,7 +879,9 @@ class BaseMixin(object):
         return not state.persistent
 
 
-class BaseDocument(BaseObject, BaseMixin):
+class BaseDocument(six.with_metaclass(
+        DocMeta,
+        BaseObject, MultiEngineDocMixin, BaseMixin)):
     """ Base class for SQLA models.
 
     Subclasses of this class that do not define a model schema
@@ -852,6 +890,10 @@ class BaseDocument(BaseObject, BaseMixin):
     __abstract__ = True
 
     _version = IntegerField(default=0)
+
+    @classmethod
+    def _is_abstract(cls):
+        return cls.__dict__.get('__abstract__', False)
 
     def _bump_version(self):
         if self._is_modified():
@@ -905,12 +947,3 @@ class BaseDocument(BaseObject, BaseMixin):
         columns.update(cls._mapped_relationships())
         column = columns.get(field_name)
         return getattr(column, '_init_kwargs', None)
-
-
-class ESBaseDocument(six.with_metaclass(ESMetaclass, BaseDocument)):
-    """ Base class for SQLA models that use Elasticsearch.
-
-    Subclasses of this class that do not define a model schema
-    should be abstract as well (__abstract__ = True).
-    """
-    __abstract__ = True

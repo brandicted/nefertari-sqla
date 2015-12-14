@@ -131,6 +131,31 @@ class TestBaseMixin(object):
             }
         }
 
+    def test_get_fields_creators(self, memory_db):
+        class Department(docs.BaseDocument):
+            __tablename__ = 'department'
+            id = fields.IdField(primary_key=True)
+            company_id = fields.ForeignKeyField(
+                ref_document='Company', ref_column='company.id',
+                ref_column_type=fields.IdField)
+
+        class Company(docs.BaseDocument):
+            __tablename__ = 'company'
+            id = fields.IdField(primary_key=True)
+            departments = fields.Relationship(
+                document='Department', backref_name='company')
+
+        dep_fields = Department._get_fields_creators()
+        assert set(dep_fields.keys()) == {
+            'id', '_version', 'company_id'}
+        assert dep_fields['id'] is fields.IdField
+        assert dep_fields['company_id'] is fields.ForeignKeyField
+
+        parent_fields = Company._get_fields_creators()
+        assert set(parent_fields.keys()) == {'id', '_version', 'departments'}
+        assert parent_fields['id'] is fields.IdField
+        assert parent_fields['departments'] is fields.Relationship
+
     def test_pk_field(self, memory_db):
         class MyModel(docs.BaseDocument):
             __tablename__ = 'mymodel'
@@ -462,7 +487,7 @@ class TestBaseMixin(object):
     def test_underscore_update_many(self):
         item = Mock()
         assert docs.BaseMixin._update_many([item], {'foo': 'bar'}) == 1
-        item.update.assert_called_once_with({'foo': 'bar'}, None)
+        item.update.assert_called_once_with({'foo': 'bar'}, request=None)
 
     @patch.object(docs.BaseMixin, '_clean_queryset')
     def test_underscore_update_many_query(self, mock_clean):
@@ -714,6 +739,18 @@ class TestBaseMixin(object):
 
 
 class TestBaseDocument(object):
+
+    def test_is_abstract(self, memory_db):
+        class Foo(docs.BaseDocument):
+            __abstract__ = True
+
+        assert Foo._is_abstract()
+
+        class Bar(Foo):
+            __tablename__ = 'bar'
+            barbar = fields.StringField(primary_key=True)
+
+        assert not Bar._is_abstract()
 
     def test_bump_version(self, simple_model, memory_db):
         from datetime import datetime

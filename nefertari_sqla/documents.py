@@ -606,9 +606,14 @@ class BaseMixin(object):
         if isinstance(items, Query):
             del_queryset = cls._clean_queryset(items)
             del_items = del_queryset.all()
-            del_count = del_queryset.delete(
-                synchronize_session=synchronize_session)
-            on_bulk_delete(cls, del_items, request)
+            try:
+                del_count = del_queryset.delete(
+                    synchronize_session=synchronize_session)
+                del_queryset.session.flush()
+            except:
+                raise
+            else:
+                on_bulk_delete(cls, del_items, request)
             return del_count
         items_count = len(items)
         session = Session()

@@ -448,11 +448,13 @@ class TestBaseMixin(object):
         clean_items = Query("ASD")
         clean_items.all = Mock(return_value=[1, 2, 3])
         clean_items.delete = Mock()
+        clean_items.session = Mock()
         mock_clean.return_value = clean_items
         count = docs.BaseMixin._delete_many(items)
         mock_clean.assert_called_once_with(items)
         clean_items.delete.assert_called_once_with(
             synchronize_session=False)
+        clean_items.session.flush.assert_called_once_with()
         mock_on_bulk.assert_called_once_with(
             docs.BaseMixin, [1, 2, 3], None)
         assert count == clean_items.delete()

@@ -104,27 +104,28 @@ class BaseMixin(object):
             included documents. If relationship field is not
             present in this list, this field's value in JSON will be an
             object's ID or list of IDs.
-        _nesting_depth: Depth of relationship field nesting in JSON.
-            Defaults to 1(one) which makes only one level of relationship
-            nested.
+        _nesting_redundancy: Number of times instances of this document
+            can be included in JSON output as complete objects.
     """
     _public_fields = None
     _auth_fields = None
     _hidden_fields = None
     _nested_relationships = ()
-    _nesting_depth = 1
+    _nesting_redundancy = 1
 
     _type = property(lambda self: self.__class__.__name__)
 
     @classmethod
-    def get_es_mapping(cls, _depth=None, types_map=None):
+    def get_es_mapping(cls, types_map=None, _ancestors=None):
         """ Generate ES mapping from model schema. """
         from nefertari.elasticsearch import ES
+        if _ancestors is None:
+            _ancestors = {}
+        _ancestors.setdefault(cls.__name__, 0)
+        _ancestors[cls.__name__] += 1
+
         if types_map is None:
             types_map = TYPES_MAP
-        if _depth is None:
-            _depth = cls._nesting_depth
-        depth_reached = _depth <= 0
 
         properties = {}
         mapping = {
@@ -146,10 +147,15 @@ class BaseMixin(object):
             properties[name] = types_map[column_type]
 
         for name, column in relationships.items():
-            if name in cls._nested_relationships and not depth_reached:
+            model_cls = column.mapper.class_
+            nested_rel = name in cls._nested_relationships
+            curr_depth = _ancestors.get(model_cls.__name__, 0)
+            depth_reached = curr_depth >= model_cls._nesting_redundancy
+
+            if nested_rel and not depth_reached:
                 column_type = {'type': 'nested'}
-                submapping = column.mapper.class_.get_es_mapping(
-                    _depth=_depth-1)
+                submapping = model_cls.get_es_mapping(
+                    _ancestors=_ancestors)
                 column_type.update(list(submapping.values())[0])
             else:
                 rel_pk_field = column.mapper.class_.pk_field_type()
@@ -684,28 +690,33 @@ class BaseMixin(object):
         return null_values
 
     def to_dict(self, **kwargs):
-        _depth = kwargs.get('_depth')
-        if _depth is None:
-            _depth = self._nesting_depth
-        depth_reached = _depth is not None and _depth <= 0
+        _ancestors = kwargs.get('_ancestors') or {}
+        _ancestors.setdefault(self._type, 0)
+        _ancestors[self._type] += 1
 
         _data = dictset()
         native_fields = self.__class__.native_fields()
         for field in native_fields:
             value = getattr(self, field, None)
 
-            include = field in self._nested_relationships
-            if not include or depth_reached:
-                encoder = lambda v: getattr(v, v.pk_field(), None)
-            else:
-                encoder = lambda v: v.to_dict(_depth=_depth-1)
+            if isinstance(value, (BaseMixin, InstrumentedList)):
+                depth_reached = False
+                if value:
+                    obj = value if isinstance(value, BaseMixin) else value[0]
+                    curr_depth = _ancestors.get(obj._type, 0)
+                    depth_reached = curr_depth >= obj._nesting_redundancy
+                include = field in self._nested_relationships
+                if not include or depth_reached:
+                    encoder = lambda v: getattr(v, v.pk_field(), None)
+                else:
+                    encoder = lambda v: v.to_dict(_ancestors=_ancestors)
 
             if isinstance(value, BaseMixin):
                 value = encoder(value)
             elif isinstance(value, InstrumentedList):
                 value = [encoder(val) for val in value]
             elif hasattr(value, 'to_dict'):
-                value = value.to_dict(_depth=_depth-1)
+                value = value.to_dict()
 
             _data[field] = value
         _data['_type'] = self._type

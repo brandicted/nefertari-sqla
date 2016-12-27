@@ -147,7 +147,7 @@ class BaseMixin(object):
 
         for name, column in relationships.items():
             if name in cls._nested_relationships and not depth_reached:
-                column_type = {'type': 'nested'}
+                column_type = {'type': 'nested', 'include_in_parent': True}
                 submapping = column.mapper.class_.get_es_mapping(
                     _depth=_depth-1)
                 column_type.update(list(submapping.values())[0])
@@ -633,13 +633,14 @@ class BaseMixin(object):
         if isinstance(items, Query):
             upd_queryset = cls._clean_queryset(items)
             upd_queryset._request = request
+            updated_item = upd_queryset.all()
             upd_count = upd_queryset.update(
                 params, synchronize_session=synchronize_session)
-            return upd_count
+            return {"count": upd_count, "items": updated_item}
         items_count = len(items)
         for item in items:
             item.update(params, request)
-        return items_count
+        return {"count": items_count, "items": items}
 
     @classmethod
     def _clean_queryset(cls, queryset):

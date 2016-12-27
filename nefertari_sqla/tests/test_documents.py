@@ -123,6 +123,7 @@ class TestBaseMixin(object):
                     'name': {'type': 'string'},
                     'myself': {
                         'type': 'nested',
+                        'include_in_parent': True,
                         'properties': myself_props
                     }
                 }
@@ -459,7 +460,7 @@ class TestBaseMixin(object):
 
     def test_underscore_update_many(self):
         item = Mock()
-        assert docs.BaseMixin._update_many([item], {'foo': 'bar'}) == 1
+        assert docs.BaseMixin._update_many([item], {'foo': 'bar'}) == {'count': 1, 'items': [item]}
         item.update.assert_called_once_with({'foo': 'bar'}, None)
 
     @patch.object(docs.BaseMixin, '_clean_queryset')
@@ -470,11 +471,11 @@ class TestBaseMixin(object):
         clean_items.all = Mock(return_value=[1, 2, 3])
         clean_items.update = Mock()
         mock_clean.return_value = clean_items
-        count = docs.BaseMixin._update_many(items, {'foo': 'bar'})
+        result = docs.BaseMixin._update_many(items, {'foo': 'bar'})
         mock_clean.assert_called_once_with(items)
         clean_items.update.assert_called_once_with(
             {'foo': 'bar'}, synchronize_session='fetch')
-        assert count == clean_items.update()
+        assert result['count'] == clean_items.update()
 
     def test_repr(self, simple_model, memory_db):
         obj = simple_model()
